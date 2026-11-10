@@ -250,6 +250,61 @@ function homeDir($: EngineInterface) {
   }))
 }
 
+// Which front end launched a session, and whether its prompts come from an
+// agent or a schedule rather than a person. The server leaves those prompts
+// out of your time, however many there are. One detector per front end, each
+// reading the env vars that front end sets ($.env.get only takes names
+// spelled out), called in turn from launchOf, first answer wins: supporting
+// another front end is a function like paseoLaunch and a line there.
+// Only say who launched it when the front end records it: an unlabelled
+// session could still be a script, so it gets no launchedBy and the server
+// falls back on its usual rule for scripted sessions
+type Launch = { launcher: string; launchedBy?: 'agent' | 'schedule' }
+
+async function launchOf($: EngineInterface): Promise<Launch | Record<string, never>> {
+  return (await paseoLaunch($).catch(() => undefined)) ?? {}
+}
+
+// Paseo sets PASEO_AGENT_ID and keeps each agent at
+// $PASEO_HOME/agents/<cwd, slashes as dashes>/<id>.json, labelled with the
+// agent that created it or the schedule that ran it. An empty parent id names
+// no agent (seen on a handoff a person went on to talk to)
+async function paseoLaunch($: EngineInterface): Promise<Launch | undefined> {
+  const id = await $.env.get('PASEO_AGENT_ID')
+  if (!id) return undefined
+  const [paseoHome, cwd] = await Promise.all([$.env.get('PASEO_HOME'), $.env.get('PASEO_AGENT_CWD')])
+  const labels = (await paseoRecord($, `${paseoHome || `${await homeDir($)}/.paseo`}/agents`, id, cwd))?.labels ?? {}
+  if (labels['paseo.parent-agent-id']) return { launcher: 'paseo', launchedBy: 'agent' }
+  if (labels['paseo.schedule-id']) return { launcher: 'paseo', launchedBy: 'schedule' }
+  return { launcher: 'paseo' }
+}
+
+type PaseoRecord = { labels?: Record<string, string> }
+
+// where the cwd says it is, or else whichever folder holds it
+async function paseoRecord($: EngineInterface, dir: string, id: string, cwd?: string): Promise<PaseoRecord | undefined> {
+  if (!/^[\w-]{1,128}$/.test(id)) return undefined
+  const guess = cwd?.replace(/^\/+/, '').replaceAll('/', '-')
+  const found = guess ? await readJson($, `${dir}/${guess}/${id}.json`) : undefined
+  if (found) return found as PaseoRecord
+  for (const entry of await $.fs.list(dir).catch(() => [])) {
+    if (entry.kind !== 'dir' || entry.name === guess) continue
+    const record = await readJson($, `${dir}/${entry.name}/${id}.json`)
+    if (record) return record as PaseoRecord
+  }
+  return undefined
+}
+
+// a JSON file's value, or undefined when it's missing or isn't JSON
+async function readJson($: EngineInterface, path: string): Promise<unknown> {
+  if (!(await $.fs.exists(path).catch(() => false))) return undefined
+  try {
+    return JSON.parse(String(await $.fs.read(path)))
+  } catch {
+    return undefined
+  }
+}
+
 async function append($: EngineInterface, path: string, rows: Fields[]) {
   const text = rows.map(row => `${JSON.stringify(row)}\n`).join('')
   const { exitCode, stderr } = await $.process.run(['tee', '-a', path], { stdin: text })
@@ -1452,7 +1507,7 @@ export const register: Register = on => {
     const sessionId = await $.session.id()
     if (!(await read($, startedSessions)).includes(sessionId)) {
       await update($, startedSessions, ids => [...ids, sessionId])
-      await log($, 'session_start', { surface: e.surface, isInteractive: e.isInteractive })
+      await log($, 'session_start', { surface: e.surface, isInteractive: e.isInteractive, ...(await launchOf($)) })
       sweep($)
       nudgeUpdate($)
     }

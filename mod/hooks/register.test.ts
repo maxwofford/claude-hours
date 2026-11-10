@@ -77,7 +77,9 @@ const setup = (on: On) => {
   on('clock.now', () => ({ value: now }))
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.cwd', () => ({ value: cwd }))
-  on('env.get', () => ({ value: '/home/test' }))
+  // env vars by name; the rest are unset
+  const env: Record<string, string> = { HOME: '/home/test', CLAUDE_CONFIG_DIR: '/home/test' }
+  on('env.get', (_, e) => ({ value: env[e.name] }))
   on('process.run', (_, e) => {
     const [cmd] = e.argv
     runs.push([...e.argv])
@@ -163,6 +165,11 @@ const setup = (on: On) => {
   on('prompt.change', (_, e) => ({ text: e.text }))
   on('fs.exists', (_, e) => ({ value: files.has(e.path) }))
   on('fs.read', (_, e) => ({ value: files.get(e.path) ?? '' }))
+  // a folder's entries, from the files under it
+  on('fs.list', (_, e) => {
+    const names = new Set([...files.keys()].filter(p => p.startsWith(`${e.path}/`)).map(p => p.slice(e.path!.length + 1).split('/')[0]!))
+    return { value: [...names].map(name => ({ name, kind: files.has(`${e.path}/${name}`) ? 'file' : 'dir', size: 0, mtimeMs: 0, isLink: false })) }
+  })
   // every write in order, a path again each time it's rewritten
   const writes: string[] = []
   on('fs.write', (_, e) => {
@@ -180,6 +187,7 @@ const setup = (on: On) => {
     return { value: undefined }
   })
   return {
+    env,
     store,
     writes,
     runs,
@@ -297,6 +305,43 @@ test('session start logs once across reloads, session end logs its reason', asyn
     ['session_start', 'terminal'],
     ['session_end', 'prompt_input_exit'],
   ])
+})
+
+test('a Paseo session says an agent launched it when Paseo labels it so', async ($, on) => {
+  const { lines, env, files } = setup(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  // under the folder its cwd names
+  Object.assign(env, { PASEO_AGENT_ID: 'a-1', PASEO_AGENT_CWD: '/home/test/proj' })
+  files.set('/home/test/.paseo/agents/home-test-proj/a-1.json', JSON.stringify({ labels: { 'paseo.parent-agent-id': 'boss' } }))
+  await $.session.start({ cwd: '/proj', surface: null, isInteractive: false } as never)
+  expect(lines.at(-1)).toMatchObject({ event: 'session_start', launcher: 'paseo', launchedBy: 'agent' })
+})
+
+test("a scheduled Paseo session is found even where its cwd doesn't name the folder", async ($, on) => {
+  const { lines, env, files } = setup(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  Object.assign(env, { PASEO_AGENT_ID: 'a-2', PASEO_AGENT_CWD: '/elsewhere', PASEO_HOME: '/srv/paseo' })
+  files.set('/srv/paseo/agents/some-dir/a-2.json', JSON.stringify({ labels: { 'paseo.schedule-id': 's' } }))
+  await $.session.start({ cwd: '/proj', surface: null, isInteractive: false } as never)
+  expect(lines.at(-1)).toMatchObject({ event: 'session_start', launcher: 'paseo', launchedBy: 'schedule' })
+})
+
+test("a Paseo session without those labels, or whose record won't parse, only names Paseo", async ($, on) => {
+  const { lines, env, files } = setup(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  Object.assign(env, { PASEO_AGENT_ID: 'a-3', PASEO_AGENT_CWD: '/home/test/proj' })
+  files.set('/home/test/.paseo/agents/home-test-proj/a-3.json', '{ not json')
+  await $.session.start({ cwd: '/proj', surface: null, isInteractive: false } as never)
+  expect(lines.at(-1)).toMatchObject({ event: 'session_start', launcher: 'paseo' })
+  expect(lines.at(-1)).not.toHaveProperty('launchedBy')
+})
+
+test('a session no front end claims names no launcher', async ($, on) => {
+  const { lines } = setup(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  expect(lines.at(-1)).toMatchObject({ event: 'session_start' })
+  expect(lines.at(-1)).not.toHaveProperty('launcher')
 })
 
 test('a session file opens with a header, rows carry ms since it, and a cd gets a cwd_changed', async ($, on) => {
