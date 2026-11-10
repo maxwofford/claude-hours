@@ -263,13 +263,59 @@ draft lasted; an empty starting box and `truncated: false` are left out.
 
 ## How time is counted
 
+There are two ways, picked with the toggle on the overview and timeline:
+**You** (the default, also what `/time-track stats` shows) and **Activity**
+(`/api/summary?time=all`), the hub's first count: every turn of Claude's in
+full, plus the gaps around them up to an idle cap. Activity isn't You plus
+more: it drops any gap past the cap that You still partly counts, so a day
+of long reads can come out higher in You. Projects are named, and days and
+hours cut, the same way for both (the last two points below).
+
+### You
+
+Your time is where your attention was, and there's one of you however many
+sessions are open. All in `attention()` in `src/lib/analytics/aggregate.ts`.
+
+- Heartbeats are what only a person does: send a prompt, give up a draft,
+  press Esc, answer a question or a permission dialog. Each gap between two
+  of them, in any sessions, goes to at most one place, so three tabs for an
+  hour are an hour, and a copied or forked session (the same prompt at the
+  same moment twice) adds nothing.
+- **Replying.** Back from each heartbeat, over the stretch since its session
+  had something for you (an answer, a question) or since the heartbeat
+  before, whichever is later. Typing (`typingMs`, live mod only) counts in
+  full. The rest counts in full up to 3 min, then by how likely it is you
+  were still on it, and once it looks like you'd left, as 3 min of coming
+  back (re-reading, then writing). A 10 min gap counts about 7.4, 30 min
+  about 6.3, an hour about 4.2, past 2 h exactly 3.
+- **Watching.** On from a heartbeat that set Claude working, until it
+  answers, at most 5 min, and never into the next reply. So a 40 min turn
+  you walked away from adds 5 min, not 40.
+- Where those numbers come from: 7,000 of Max's replies to a finished turn,
+  backfilled from his transcripts (Mar to Nov 2026). On a log scale their
+  wait times are two bell curves, replies while still on it (87%, typically
+  64 s) and replies after looking away (typically 18 min, spread wide), which
+  cross near 12 min. After a turn longer than 5 min, a reply within a
+  minute was half as likely as after a short one.
+- A session counts if it has a person's prompt and isn't a script, or has a
+  script's two or more: Paseo and other SDK front ends drive Claude Code as
+  `claude -p` does, but a script sends one prompt.
+- Claude's turns, tool calls and notifications make no time, though they say
+  where Claude was working, so a stretch goes to the repo it was in (see
+  below). Models' time stays Claude's, and project colors are ranked by
+  Activity.
+- A range takes its first reply's gap from the heartbeat before it, in any
+  session up to 2 h back, and a stretch over the range's edge is cut there.
+
+### Activity
+
 - Every event is a moment of activity. Every main-thread turn (`turn_end` or
   `interrupt` without an `agentId`) is a span covering its full `durationMs`,
   so a long Bash call or a long think counts even though it logs nothing in
   the middle.
 - Moments and spans closer together than the **idle cap** merge into active
   time. Longer gaps are idle. Each person picks their own on `/settings`
-  (1, 2, 5, 10 or 15 min; 2 until they do), and their dashboard counts with
+  (1, 2, 5, 10 or 15 min; 5 until they do), and their dashboard counts with
   theirs, an admin looking at it too.
 - Waiting on you isn't Claude working: a main-thread `AskUserQuestion` or
   `ExitPlanMode` call, or a permission dialog (the turn's `waits`). Claude
@@ -309,23 +355,6 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   keystroke and puts `typingMs` (pauses over 30 s left out) on the `prompt`
   line. Drafts that never get sent are logged as `draft_abandoned`. Both count
   as spans of `typingMs` ending at Enter, or at the moment the draft was given up.
-- The overview can count only prompts instead (`/api/summary?time=prompts`),
-  the way Hackatime counts heartbeats: each prompt you wrote and each draft
-  you gave up is a span of its typing, and it also gets the gap before it
-  (from the last prompt in any session), up to the idle cap. So a break
-  still counts the cap, a gap between prompts in two repos goes to the
-  later one, and nothing counts after the last prompt. Unlike Hackatime,
-  the very first prompt gets the cap before it too, as if after a break,
-  so a range's time only ever depends on prompts near it. A range or a day
-  takes its first prompt's gap from the one before it, like Hackatime's
-  boundary-aware sums; only a gap that crosses the edge itself is split
-  there, by the clock. A script's prompts don't count here: none from a
-  non-interactive session (`claude -p` or the SDK) and none with origin
-  `sdk`, though Claude's work for them still counts in the other mode.
-  Claude's turns, tool calls and notifications make no time then, though
-  they still say which repo a thread was in. A backfilled prompt has no
-  typing, so it's just the moment it was sent. Models' time stays Claude's,
-  and project colors are still ranked by all of the time.
 - A project is named after the nearest git root above the event's `cwd` (or
   above the file or `repo` it worked in), so subdirectories don't split a
   repo. A worktree (like a subagent's under `.claude/worktrees`) counts as
@@ -340,44 +369,6 @@ draft lasted; an empty starting box and `truncated: false` are left out.
 - The per-day and time-of-day columns are stacked by project. A stretch two
   projects worked at once is split evenly between them there, so each column
   still adds up to its total.
-
-### Your time
-
-`/api/summary?time=you` counts only your time: where your attention was,
-with one of you however many sessions are open. All in `attention()` in
-`src/lib/analytics/aggregate.ts`. Projects are named, and days and hours
-cut, as above.
-
-- Heartbeats are what only a person does: send a prompt, give up a draft,
-  press Esc, answer a question or a permission dialog. Each gap between two
-  of them, in any sessions, goes to at most one place, so three tabs for an
-  hour are an hour, and a copied or forked session (the same prompt at the
-  same moment twice) adds nothing.
-- **Replying.** Back from each heartbeat, over the stretch since its session
-  had something for you (an answer, a question) or since the heartbeat
-  before, whichever is later. Typing (`typingMs`, live mod only) counts in
-  full. The rest counts in full up to 3 min, then by how likely it is you
-  were still on it, and once it looks like you'd left, as 3 min of coming
-  back (re-reading, then writing). A 10 min gap counts about 7.4, 30 min
-  about 6.3, an hour about 4.2, past 2 h exactly 3.
-- **Watching.** On from a heartbeat that set Claude working, until it
-  answers, at most 5 min, and never into the next reply. So a 40 min turn
-  you walked away from adds 5 min, not 40.
-- Where those numbers come from: 7,000 of Max's replies to a finished turn,
-  backfilled from his transcripts (Mar to Nov 2026). On a log scale their
-  wait times are two bell curves, replies while still on it (87%, typically
-  64 s) and replies after looking away (typically 18 min, spread wide), which
-  cross near 12 min. After a turn longer than 5 min, a reply within a
-  minute was half as likely as after a short one.
-- A session counts if it has a person's prompt and isn't a script, or has a
-  script's two or more: Paseo and other SDK front ends drive Claude Code as
-  `claude -p` does, but a script sends one prompt.
-- Claude's turns, tool calls and notifications make no time, though they say
-  where Claude was working, so a stretch goes to the repo it was in. Models'
-  time stays Claude's, and project colors are still ranked by all of the
-  time.
-- A range takes its first reply's gap from the heartbeat before it, in any
-  session up to 2 h back, and a stretch over the range's edge is cut there.
 
 ## Sync protocol (v1)
 
