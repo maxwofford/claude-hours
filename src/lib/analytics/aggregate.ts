@@ -526,6 +526,34 @@ const regrouped = (pieces: [string, Interval][]) => {
   return new Map([...byProject].map(([project, intervals]): [string, Interval[]] => [project, mergeWithin(intervals, 0)]))
 }
 
+// How long you spend on a reply, from Max Wofford's 7,000 replies to a
+// finished turn, backfilled from his transcripts (Mar to Nov 2026). Their
+// wait times, on a log scale, are two bell curves: replies while still on it
+// (87%, typically 64 s) and replies after looking away (typically 18 min,
+// spread wide). They cross near 12 min
+const ENGAGED = { share: 0.874, medianMs: 64_000, sigma: 1.12 }
+const AWAY = { share: 0.126, medianMs: 1_073_000, sigma: 1.9 }
+// coming back from away: re-reading where it was, then writing the reply
+export const RETURN_MS = 3 * 60_000
+// past this, a gap is away (the engaged curve is under 0.3% there), so
+// what's before it changes nothing
+export const REACH_MS = 2 * 3_600_000
+
+// a lognormal's density at ms, scaled by its share (the 1/√2π both share cancels)
+const density = ({ share, medianMs, sigma }: typeof ENGAGED, ms: number) => (share * Math.exp(-((Math.log(ms / medianMs) / sigma) ** 2) / 2)) / sigma
+
+// how much of a gap of ms before a reply was spent on it: all of it while it
+// looks like you were still on it, RETURN_MS once it looks like you'd left,
+// and between those the two weighed by how likely each is
+export function replyMs(ms: number) {
+  if (ms <= 0) return 0
+  const back = Math.min(ms, RETURN_MS)
+  if (ms >= REACH_MS) return back
+  const engaged = density(ENGAGED, Math.max(ms, 1000))
+  const still = engaged / (engaged + density(AWAY, Math.max(ms, 1000)))
+  return still * ms + (1 - still) * back
+}
+
 function clip([start, end]: Interval, from: number, to: number): Interval | undefined {
   const s = Math.max(start, from)
   const e = Math.min(end, to)

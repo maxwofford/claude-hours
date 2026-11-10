@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { activeIntervals, dayKey, firstAt, languageOf, lastAt, projectSpans, summarize, type Event } from './aggregate'
+import { RETURN_MS, activeIntervals, dayKey, firstAt, languageOf, lastAt, projectSpans, replyMs, summarize, type Event } from './aggregate'
 
 const MIN = 60_000
 const at = (iso: string, event: string, extra: Partial<Event> = {}): Event => ({
@@ -105,6 +105,16 @@ test("counting only prompts, a script's prompts count nothing, though Claude's w
   const s = summarize(events, { idleCapMs: 2 * MIN, counting: 'prompts' })
   expect(s.totalMs).toBe(0)
   expect(s.prompts.count).toBe(2)
+})
+
+test('a gap before a reply counts in full while short, and as coming back once it looks like you left', () => {
+  expect(replyMs(2 * MIN)).toBe(2 * MIN)
+  expect(replyMs(RETURN_MS)).toBe(RETURN_MS)
+  const ten = replyMs(10 * MIN)
+  expect(ten).toBeGreaterThan(RETURN_MS)
+  expect(ten).toBeLessThan(10 * MIN)
+  expect(replyMs(40 * MIN)).toBeLessThan(ten)
+  expect(replyMs(5 * 60 * MIN)).toBe(RETURN_MS)
 })
 
 test('a turn that asked the person something works around the wait, judged like any gap', () => {
