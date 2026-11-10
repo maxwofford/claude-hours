@@ -8,5 +8,5 @@ import type { PageLoad } from './$types'
 export const ssr = false
 
 export const load: PageLoad = async ({ parent, url, fetch }) => {
-  if ((await parent()).person) prefetchDigest({ url, fetch }, false, setting<Counting>('counting', 'all'))
+  if ((await parent()).person) prefetchDigest({ url, fetch }, false, setting<Counting>('time', 'you'))
 }

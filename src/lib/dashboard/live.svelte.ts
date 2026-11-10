@@ -108,7 +108,7 @@ function digestPath(range: Range, spans: boolean, counting: Counting) {
 
 // the hub's summary of a range, with what all time decides; spans for the
 // timeline, counting what the overview's toggle says counts as time
-export function liveDigest(range: () => Range, spans = false, counting: () => Counting = () => 'all') {
+export function liveDigest(range: () => Range, spans = false, counting: () => Counting = () => 'you') {
   return polled<Digest>(
     () => digestKey(range(), spans, counting()),
     () => digestPath(range(), spans, counting()),
@@ -116,13 +116,13 @@ export function liveDigest(range: () => Range, spans = false, counting: () => Co
 }
 
 // for a page's load: the summary its stored range will ask for
-export function prefetchDigest(from: Ahead, spans = false, counting: Counting = 'all') {
+export function prefetchDigest(from: Ahead, spans = false, counting: Counting = 'you') {
   const range = load<Range>('range', '7')
   prefetch(from, digestKey(range, spans, counting), digestPath(range, spans, counting))
 }
 
 // for a range picker's option, pointed at or focused before it's picked
-export const prefetchRange = (range: Range, spans = false, counting: Counting = 'all') =>
+export const prefetchRange = (range: Range, spans = false, counting: Counting = 'you') =>
   prefetch({ url: new URL(location.href), fetch }, digestKey(range, spans, counting), digestPath(range, spans, counting))
 
 const sessionPath = (id: string) => `/api/session/${encodeURIComponent(id)}?tz=${encodeURIComponent(tz())}`

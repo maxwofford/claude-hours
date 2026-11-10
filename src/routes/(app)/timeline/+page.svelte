@@ -12,8 +12,8 @@
 
   const range = stored<Range>('range', '7')
   const hours = stored<Hours>('hours', 'fit')
-  // all the time, or only the time spent prompting, the same pick as the overview's
-  const counting = stored<Counting>('counting', 'all')
+  // your time, or activity, the same pick as the overview's
+  const counting = stored<Counting>('time', 'you')
   const live = liveDigest(
     () => range.value,
     true,
@@ -60,7 +60,7 @@
     <div>
       <h1 class="text-2xl font-semibold tracking-tight">Timeline</h1>
       <p class="text-sm text-muted-foreground">
-        {counting.value === 'prompts' ? 'Time spent prompting' : 'Every session'}, {rangeWindow(range.value).label}
+        {counting.value === 'you' ? 'Your time' : 'Every session'}, {rangeWindow(range.value).label}
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
@@ -71,8 +71,8 @@
         aria-label="What counts as time"
         bind:value={() => counting.value, (next: string) => next && (counting.value = next as Counting)}
       >
-        <ToggleGroup.Item value="all">Prompts + Claude</ToggleGroup.Item>
-        <ToggleGroup.Item value="prompts">Prompts</ToggleGroup.Item>
+        <ToggleGroup.Item value="you">You</ToggleGroup.Item>
+        <ToggleGroup.Item value="all">Activity</ToggleGroup.Item>
       </ToggleGroup.Root>
       <RangePicker bind:range={range.value} spans counting={counting.value} />
     </div>

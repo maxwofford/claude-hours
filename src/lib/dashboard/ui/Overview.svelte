@@ -38,9 +38,8 @@
   const range = stored<Range>('range', '7')
   // the rhythm card by hour, or by weekday once the range has more than a week
   const rhythm = stored<'hours' | 'weekdays'>('rhythm', 'hours')
-  // all the time, or only the time spent prompting, as Hackatime would count it
-  const counting = stored<Counting>('counting', 'all')
-  const prompting = $derived(counting.value === 'prompts')
+  // your time (where your attention was), or activity (Claude's turns and the gaps around them)
+  const counting = stored<Counting>('time', 'you')
   const live = liveDigest(
     () => range.value,
     false,
@@ -176,8 +175,8 @@
         aria-label="What counts as time"
         bind:value={() => counting.value, (next: string) => next && (counting.value = next as Counting)}
       >
-        <ToggleGroup.Item value="all">Prompts + Claude</ToggleGroup.Item>
-        <ToggleGroup.Item value="prompts">Prompts</ToggleGroup.Item>
+        <ToggleGroup.Item value="you">You</ToggleGroup.Item>
+        <ToggleGroup.Item value="all">Activity</ToggleGroup.Item>
       </ToggleGroup.Root>
       <RangePicker bind:range={range.value} counting={counting.value} />
     </div>
@@ -193,7 +192,7 @@
     <div class="grid gap-4 md:max-lg:gap-y-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <Card.Root class="justify-center">
         <Card.Header>
-          <Card.Description>{prompting ? 'Prompting Claude' : 'Active with Claude'}</Card.Description>
+          <Card.Description>{counting.value === 'you' ? 'Your time with Claude' : 'Active with Claude'}</Card.Description>
           <Card.Title class="text-5xl font-semibold tracking-tight tabular-nums">{duration(s.totalMs)}</Card.Title>
         </Card.Header>
         <Card.Content class="text-sm text-muted-foreground">

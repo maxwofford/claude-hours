@@ -6,7 +6,7 @@
 
   // spans: the page asks for them (the timeline), so the range fetched ahead
   // does too, counting what the page counts
-  let { range = $bindable(), spans = false, counting = 'all' }: { range: Range; spans?: boolean; counting?: Counting } = $props()
+  let { range = $bindable(), spans = false, counting = 'you' }: { range: Range; spans?: boolean; counting?: Counting } = $props()
   const RANGES: [Range, string][] = [
     ['today', 'Today'],
     ['7', '7 days'],
