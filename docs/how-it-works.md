@@ -341,6 +341,44 @@ draft lasted; an empty starting box and `truncated: false` are left out.
   projects worked at once is split evenly between them there, so each column
   still adds up to its total.
 
+### Your time
+
+`/api/summary?time=you` counts only your time: where your attention was,
+with one of you however many sessions are open. All in `attention()` in
+`src/lib/analytics/aggregate.ts`. Projects are named, and days and hours
+cut, as above.
+
+- Heartbeats are what only a person does: send a prompt, give up a draft,
+  press Esc, answer a question or a permission dialog. Each gap between two
+  of them, in any sessions, goes to at most one place, so three tabs for an
+  hour are an hour, and a copied or forked session (the same prompt at the
+  same moment twice) adds nothing.
+- **Replying.** Back from each heartbeat, over the stretch since its session
+  had something for you (an answer, a question) or since the heartbeat
+  before, whichever is later. Typing (`typingMs`, live mod only) counts in
+  full. The rest counts in full up to 3 min, then by how likely it is you
+  were still on it, and once it looks like you'd left, as 3 min of coming
+  back (re-reading, then writing). A 10 min gap counts about 7.4, 30 min
+  about 6.3, an hour about 4.2, past 2 h exactly 3.
+- **Watching.** On from a heartbeat that set Claude working, until it
+  answers, at most 5 min, and never into the next reply. So a 40 min turn
+  you walked away from adds 5 min, not 40.
+- Where those numbers come from: 7,000 of Max's replies to a finished turn,
+  backfilled from his transcripts (Mar to Nov 2026). On a log scale their
+  wait times are two bell curves, replies while still on it (87%, typically
+  64 s) and replies after looking away (typically 18 min, spread wide), which
+  cross near 12 min. After a turn longer than 5 min, a reply within a
+  minute was half as likely as after a short one.
+- A session counts if it has a person's prompt and isn't a script, or has a
+  script's two or more: Paseo and other SDK front ends drive Claude Code as
+  `claude -p` does, but a script sends one prompt.
+- Claude's turns, tool calls and notifications make no time, though they say
+  where Claude was working, so a stretch goes to the repo it was in. Models'
+  time stays Claude's, and project colors are still ranked by all of the
+  time.
+- A range takes its first reply's gap from the heartbeat before it, in any
+  session up to 2 h back, and a stretch over the range's edge is cut there.
+
 ## Sync protocol (v1)
 
 The mod sends what its session files hold, row by row, and the hub keeps
