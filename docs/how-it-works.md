@@ -371,7 +371,9 @@ cut, as above.
   minute was half as likely as after a short one.
 - A session counts if it has a person's prompt and isn't a script, or has a
   script's two or more: Paseo and other SDK front ends drive Claude Code as
-  `claude -p` does, but a script sends one prompt.
+  `claude -p` does, but a script sends one prompt. One its front end says an
+  agent or a schedule launched (the mod's `launchedBy`, so far from Paseo's
+  agent labels) never counts, however many prompts it has.
 - Claude's turns, tool calls and notifications make no time, though they say
   where Claude was working, so a stretch goes to the repo it was in. Models'
   time stays Claude's, and project colors are still ranked by all of the
