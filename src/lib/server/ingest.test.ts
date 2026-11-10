@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, test } from 'vitest'
-import { firstAt, lastAt, projectSpans, summarize } from '../analytics/aggregate'
+import { RETURN_MS, WATCH_MS, firstAt, lastAt, projectSpans, replyMs, summarize } from '../analytics/aggregate'
 import { loadEvents, sessionParts } from '../analytics/load'
 import { rowsOf, splitRuns } from '../analytics/runs'
 import { deviceTokens, people, quarantine, type Db } from './db/index'
@@ -61,43 +61,48 @@ async function expectRoundTrip(dir: string) {
   expect(events).toEqual(local)
 
   // and the hub's summary is the one the browser worked out from them, in
-  // another zone than this machine's too
-  for (const tz of [undefined, 'Asia/Kolkata']) {
-    const ever = summarize(local, { idleCapMs: CAP, tz })
-    const from = ever.sessions.at(-1)!.start
-    const to = from + 3 * 24 * 3600_000
-    const got = await digest(db, person, { from, to, tz, spans: true })
-    expect(got.range).toEqual(summarize(local, { from, to, idleCapMs: CAP, tz }))
-    expect(got.days).toEqual(ever.days)
-    expect(got.projects).toEqual(ever.projects)
-    expect(got.before).toBeUndefined()
-    // without spans it also sums the 3 days before, to compare against:
-    // the 3 days after these have these as theirs
-    const shift = 3 * 24 * 3600_000
-    expect(got.range.totalMs).toBeGreaterThan(0)
-    expect((await digest(db, person, { from: from + shift, to: to + shift, tz })).before).toBe(got.range.totalMs)
-    // which leaves out the sessions that began after it: none of a
-    // session's spans start before its firstAt or end after its lastAt
-    for (const s of ever.sessions) {
-      const events = local.filter(e => e.sessionId === s.sessionId)
-      for (const [start, end] of [...projectSpans(events, CAP).values()].flat()) {
-        expect(start).toBeGreaterThanOrEqual(firstAt(events))
-        expect(end).toBeLessThanOrEqual(lastAt(events))
+  // another zone than this machine's too, counting all of it or only yours
+  for (const counting of ['all', 'you'] as const) {
+    for (const tz of [undefined, 'Asia/Kolkata']) {
+      const ever = summarize(local, { idleCapMs: CAP, tz, counting })
+      const from = ever.sessions.at(-1)!.start
+      const to = from + 3 * 24 * 3600_000
+      const got = await digest(db, person, { from, to, tz, spans: true, counting })
+      expect(got.range).toEqual(summarize(local, { from, to, idleCapMs: CAP, tz, counting }))
+      expect(got.days).toEqual(ever.days)
+      expect(got.before).toBeUndefined()
+      // without spans it also sums the 3 days before, to compare against:
+      // the 3 days after these have these as theirs
+      const shift = 3 * 24 * 3600_000
+      expect(got.range.totalMs).toBeGreaterThan(0)
+      expect((await digest(db, person, { from: from + shift, to: to + shift, tz, counting })).before).toBe(got.range.totalMs)
+      // and check it where sessions start and end too
+      for (const s of ever.sessions.slice(0, 20)) {
+        for (const at of [s.start - 3600_000, s.start + 60_000, s.end - 60_000]) {
+          const earlier = { from: at - shift, to: at, idleCapMs: CAP, tz, counting }
+          expect((await digest(db, person, { from: at, to: at + shift, tz, counting })).before).toBe(summarize(local, earlier).totalMs)
+        }
+      }
+      // a late window skips the sessions over before it, an empty one past
+      // everything still has its days, and both sum as all of history would
+      const newest = ever.sessions[0]!.start
+      for (const late of [newest - 2 * 24 * 3600_000, newest + 30 * 24 * 3600_000]) {
+        const window = { from: late, to: late + 3 * 24 * 3600_000 }
+        expect((await digest(db, person, { ...window, tz, spans: true, counting })).range).toEqual(
+          summarize(local, { ...window, idleCapMs: CAP, tz, counting }),
+        )
       }
     }
-    // and check it where sessions start and end too
-    for (const s of ever.sessions.slice(0, 20)) {
-      for (const at of [s.start - 3600_000, s.start + 60_000, s.end - 60_000]) {
-        const earlier = { from: at - shift, to: at, idleCapMs: CAP, tz }
-        expect((await digest(db, person, { from: at, to: at + shift, tz })).before).toBe(summarize(local, earlier).totalMs)
-      }
-    }
-    // a late window skips the sessions over before it, an empty one past
-    // everything still has its days, and both sum as all of history would
-    const newest = ever.sessions[0]!.start
-    for (const late of [newest - 2 * 24 * 3600_000, newest + 30 * 24 * 3600_000]) {
-      const window = { from: late, to: late + 3 * 24 * 3600_000 }
-      expect((await digest(db, person, { ...window, tz, spans: true })).range).toEqual(summarize(local, { ...window, idleCapMs: CAP, tz }))
+  }
+  // projects are ranked (and colored) by all of the time, whatever's counted
+  expect((await digest(db, person, { counting: 'you' })).projects).toEqual(summarize(local, { idleCapMs: CAP }).projects)
+  // none of a session's spans start before its firstAt or end after its
+  // lastAt, so a window leaves out the sessions that began after it
+  for (const s of summarize(local, { idleCapMs: CAP }).sessions) {
+    const events = local.filter(e => e.sessionId === s.sessionId)
+    for (const [start, end] of [...projectSpans(events, CAP).values()].flat()) {
+      expect(start).toBeGreaterThanOrEqual(firstAt(events))
+      expect(end).toBeLessThanOrEqual(lastAt(events))
     }
   }
 }
@@ -283,6 +288,41 @@ describe('digest', () => {
     const got = await digest(db, person, { counting: 'prompts' })
     expect(got.range.totalMs).toBe(CAP + 60_000 + CAP / 2 + 30_000)
     expect(got.days.reduce((sum, d) => sum + d.ms, 0)).toBe(got.range.totalMs)
+  })
+
+  test('counting your time is kept apart from counting it all, with the same colors', async () => {
+    const { db, person } = await withPerson()
+    await ingest(db, person, [
+      run(0, [
+        { t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 },
+        { t: 20 * 60_000, event: 'turn_end', durationMs: 19 * 60_000 },
+      ]),
+    ])
+    const all = await digest(db, person, { counting: 'all' })
+    const you = await digest(db, person, { counting: 'you' })
+    expect(all.range.totalMs).toBe(20 * 60_000)
+    // its minute of typing, coming back before it, and watching the turn start
+    expect(you.range.totalMs).toBe(60_000 + RETURN_MS + WATCH_MS)
+    expect(you.days.reduce((sum, d) => sum + d.ms, 0)).toBe(you.range.totalMs)
+    expect(you.projects).toEqual(all.projects)
+    // and neither is handed the other's summary of all of it
+    expect((await digest(db, person, { counting: 'all' })).range).toEqual(all.range)
+    expect((await digest(db, person, { counting: 'you' })).range).toEqual(you.range)
+  })
+
+  test('counting your time, a session soon after another takes its first gap from it, in the calendar too', async () => {
+    const { db, person } = await withPerson()
+    // one prompt sent at 61 s after a minute's typing, then another session's
+    // sent 10.5 min later after 30 s of it
+    const next = 61_000 + 10 * 60_000 + 30_000
+    await ingest(db, person, [
+      run(0, [{ t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 }]),
+      run(0, [{ t: 0, event: 'prompt', origin: 'composer', typingMs: 30_000 }], { session: 's2', run: next, header: { ...header, start: next } }),
+    ])
+    const got = await digest(db, person, { counting: 'you' })
+    const second = 30_000 + replyMs(next - 61_000 - 30_000)
+    expect(got.range.totalMs).toBeCloseTo(60_000 + RETURN_MS + second, 6)
+    expect(got.days.reduce((sum, d) => sum + d.ms, 0)).toBeCloseTo(got.range.totalMs, 6)
   })
 
   test('a time zone that does not exist is a RangeError', async () => {
