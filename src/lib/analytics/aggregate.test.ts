@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { RETURN_MS, activeIntervals, dayKey, firstAt, languageOf, lastAt, projectSpans, replyMs, summarize, type Event } from './aggregate'
+import { RETURN_MS, WATCH_MS, activeIntervals, dayKey, firstAt, languageOf, lastAt, projectSpans, replyMs, summarize, type Event } from './aggregate'
 
 const MIN = 60_000
 const at = (iso: string, event: string, extra: Partial<Event> = {}): Event => ({
@@ -115,6 +115,67 @@ test('a gap before a reply counts in full while short, and as coming back once i
   expect(ten).toBeLessThan(10 * MIN)
   expect(replyMs(40 * MIN)).toBeLessThan(ten)
   expect(replyMs(5 * 60 * MIN)).toBe(RETURN_MS)
+})
+
+test('counting your time, a long turn you walked away from adds what you watched of it, not all of it', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:40:00Z', 'turn_end', { durationMs: 40 * MIN, usage: { model: 'claude-opus-5-5' } }),
+    at('2026-10-19T12:43:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:44:00Z', 'turn_end', { durationMs: MIN }),
+  ]
+  const all = summarize(events, { idleCapMs: 5 * MIN })
+  const you = summarize(events, { idleCapMs: 5 * MIN, counting: 'you' })
+  expect(all.totalMs).toBe(44 * MIN)
+  // coming back to write the first (RETURN_MS), 5 min watching the long
+  // turn, the 3 min reply after it answered, and the minute of the short one
+  expect(you.totalMs).toBe(RETURN_MS + WATCH_MS + 3 * MIN + MIN)
+  // Claude's time by model is its turns' either way
+  expect(you.models).toEqual(all.models)
+  expect(you.prompts.count).toBe(2)
+})
+
+test('counting your time, sessions open at once share one timeline, each stretch going where you replied', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:01:00Z', 'prompt', { origin: 'composer', sessionId: 's2', cwd: '/code/hub', project: 'hub' }),
+    at('2026-10-19T12:03:00Z', 'prompt', { origin: 'composer' }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN, counting: 'you' })
+  // 11:57 to 12:03, never more than the clock
+  expect(s.totalMs).toBe(RETURN_MS + 3 * MIN)
+  expect(s.projects).toEqual([
+    { project: 'terra', ms: RETURN_MS + 2 * MIN },
+    { project: 'hub', ms: MIN },
+  ])
+})
+
+test("counting your time, a script's lone prompt is no one's, but a front end's conversation is yours", () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'session_start', { sessionId: 'p', isInteractive: false }),
+    at('2026-10-19T12:00:00Z', 'prompt', { sessionId: 'p', origin: 'sdk' }),
+    at('2026-10-19T12:05:00Z', 'turn_end', { sessionId: 'p', durationMs: 5 * MIN }),
+    at('2026-10-19T13:00:00Z', 'session_start', { sessionId: 'q', isInteractive: false }),
+    at('2026-10-19T13:00:00Z', 'prompt', { sessionId: 'q', origin: 'sdk' }),
+    at('2026-10-19T13:01:00Z', 'turn_end', { sessionId: 'q', durationMs: MIN }),
+    at('2026-10-19T13:02:00Z', 'prompt', { sessionId: 'q', origin: 'sdk' }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN, counting: 'you' })
+  expect(s.sessions.find(x => x.sessionId === 'p')!.activeMs).toBe(0)
+  // coming back, a minute watching, a minute replying
+  expect(s.sessions.find(x => x.sessionId === 'q')!.activeMs).toBe(RETURN_MS + 2 * MIN)
+})
+
+test('counting your time, typing counts in full however long the gap', () => {
+  const events = [
+    at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
+    at('2026-10-19T12:01:00Z', 'turn_end', { durationMs: MIN }),
+    at('2026-10-19T15:00:00Z', 'prompt', { origin: 'composer', typingMs: 20 * MIN }),
+  ]
+  const s = summarize(events, { idleCapMs: 5 * MIN, counting: 'you' })
+  // the first: coming back and a minute's watching; the second: its typing,
+  // and coming back before it
+  expect(s.totalMs).toBe(RETURN_MS + MIN + 20 * MIN + RETURN_MS)
 })
 
 test('a turn that asked the person something works around the wait, judged like any gap', () => {

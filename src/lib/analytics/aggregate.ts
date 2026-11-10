@@ -13,10 +13,11 @@ export type Event = {
 }
 
 // What counts as active time: everything (your prompts and Claude's work
-// around them), or only your prompts, the way Hackatime counts: each draft
+// around them), only your prompts, the way Hackatime counts: each draft
 // you wrote, sent or given up, is a heartbeat over its typing, and also
-// counts the gap before it, up to the idle cap
-export type Counting = 'all' | 'prompts'
+// counts the gap before it, up to the idle cap; or yours, where your
+// attention was (see attention)
+export type Counting = 'all' | 'prompts' | 'you'
 
 export type Options = {
   // window start/end in epoch ms; omit for everything
@@ -554,6 +555,100 @@ export function replyMs(ms: number) {
   return still * ms + (1 - still) * back
 }
 
+// Counting your time, there's one of you, however many sessions are open.
+// Only you send a prompt, give up a draft, press Esc, or answer a question or
+// a permission dialog: those are heartbeats. Each gap between two of them,
+// in any sessions, goes to at most one place, so it never counts twice:
+// - replying: back from a heartbeat, over the stretch since its session had
+//   something for you (an answer, a question), or since the heartbeat before
+//   it if that's later. Whatever you typed counts in full, the rest as much
+//   as it looks like you were still on it (replyMs)
+// - watching: on from a heartbeat that set Claude working, until it answers,
+//   up to WATCH_MS, and never into the next reply. After a turn longer than
+//   5 min, a reply within a minute was half as likely as after a short one:
+//   by then you've looked away
+// So a long turn you walked away from adds little, and a stretch spent
+// between three sessions is that stretch, wherever your replies went
+export const WATCH_MS = 5 * 60_000
+
+type Beat = { at: number; e: Event; sessionId: string; typingMs: number; ready: number; watchUntil: number }
+
+// a session's heartbeats, each with when its session last had something for
+// you since the one before (-Infinity for nothing) and how long after it
+// you could have been watching Claude work. A session of someone's has a
+// person's prompt and isn't a script, or has a script's two or more
+// (Paseo and other SDK front ends drive Claude Code like a script)
+function beatsOf(sessionId: string, events: Event[]): Beat[] {
+  const prompted = events.filter(isPersonPrompt).length
+  if (!prompted || (isScripted(events) && prompted < 2)) return []
+  const readies: number[] = []
+  const raw: { at: number; e: Event; typingMs: number; resumes: boolean }[] = []
+  for (const e of events) {
+    if (isMainTurn(e) && e.event === 'turn_end') readies.push(time(e))
+    if (isQuestion(e)) {
+      readies.push(time(e) - (Number(e.durationMs) || 0))
+      raw.push({ at: time(e), e, typingMs: 0, resumes: true })
+    }
+    if (isPersonPrompt(e)) raw.push({ at: time(e), e, typingMs: Number(e.typingMs) || 0, resumes: true })
+    if (e.event === 'draft_abandoned') raw.push({ at: time(e), e, typingMs: Number(e.typingMs) || 0, resumes: false })
+    if (isMainTurn(e) && e.event === 'interrupt') raw.push({ at: time(e), e, typingMs: 0, resumes: false })
+    if (!isMainTurn(e) || !Array.isArray(e.waits)) continue
+    for (const w of e.waits) {
+      if (!Array.isArray(w) || typeof w[0] !== 'number' || typeof w[1] !== 'number') continue
+      readies.push(time(e) - w[0])
+      raw.push({ at: time(e) - w[0] + w[1], e, typingMs: 0, resumes: true })
+    }
+  }
+  readies.sort((a, b) => a - b)
+  raw.sort((a, b) => a.at - b.at)
+  const end = lastAt(events)
+  return raw.map(({ at, e, typingMs, resumes }, i) => {
+    const since = i ? raw[i - 1]!.at : -Infinity
+    // the first ready after this beat, by halving
+    let lo = 0,
+      hi = readies.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (readies[mid]! <= at) lo = mid + 1
+      else hi = mid
+    }
+    // the latest ready at or before it counts if it's after the beat before
+    const last = readies[lo - 1]
+    const ready = last !== undefined && last > since ? last : -Infinity
+    return { at, e, sessionId, typingMs, ready, watchUntil: resumes ? Math.min(at + WATCH_MS, readies[lo] ?? end) : at }
+  })
+}
+
+// Your time by session and project (see above). Every session that could
+// have a heartbeat within REACH_MS of another's has to be in `sessions`
+export function attention(sessions: Map<string, Event[]>): Map<string, Map<string, Interval[]>> {
+  const beats = [...sessions].flatMap(([sessionId, events]) => beatsOf(sessionId, events))
+  beats.sort((a, b) => a.at - b.at || (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0))
+  const moves = new Map([...sessions].map(([sessionId, events]) => [sessionId, movesOf(events).get('')]))
+  const out = new Map<string, Map<string, Interval[]>>()
+  const add = (beat: Beat, interval: Interval) => {
+    if (interval[1] <= interval[0]) return
+    const byProject = out.get(beat.sessionId) ?? new Map<string, Interval[]>()
+    out.set(beat.sessionId, byProject)
+    for (const [project, piece] of placed(interval, moves.get(beat.sessionId), projectOf(beat.e))) {
+      const list = byProject.get(project)
+      if (list) list.push(piece)
+      else byProject.set(project, [piece])
+    }
+  }
+  for (const [i, beat] of beats.entries()) {
+    const before = beats[i - 1]
+    const gap = beat.at - Math.max(before?.at ?? -Infinity, beat.ready)
+    const replied = Math.min(gap, beat.typingMs + replyMs(gap - beat.typingMs))
+    add(beat, [beat.at - replied, beat.at])
+    if (before) add(before, [before.at, Math.min(before.watchUntil, beat.at - replied)])
+  }
+  const last = beats.at(-1)
+  if (last) add(last, [last.at, last.watchUntil])
+  for (const byProject of out.values()) for (const [project, intervals] of byProject) byProject.set(project, mergeWithin(intervals, 0))
+  return out
+}
+
 function clip([start, end]: Interval, from: number, to: number): Interval | undefined {
   const s = Math.max(start, from)
   const e = Math.min(end, to)
@@ -691,20 +786,6 @@ const inc = <K>(map: Map<K, number>, key: K, by = 1) => map.set(key, (map.get(ke
 export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: Options): Summary {
   const clock = clockOf(tz)
   const valid = all.filter(e => e && typeof e.ts === 'string' && !Number.isNaN(time(e)) && e.sessionId)
-  // a turn's span starts before its own line, so the default window does too.
-  // A loop, not Math.min(...xs), which overflows the stack on a big log
-  let first = Infinity,
-    last = -Infinity
-  for (const e of valid) {
-    first = Math.min(first, time(e) - leadMs(e))
-    last = Math.max(last, time(e))
-  }
-  // counting only prompts, the first one's gap before it too
-  if (counting === 'prompts') first -= idleCapMs
-  const lo = from ?? first
-  const hi = to ?? last + 1
-  const inWindow = (e: Event) => time(e) >= lo && time(e) < hi
-
   // time: per session, and within it per project, so a cd between repos
   // doesn't bridge them. A stretch two of a session's projects share counts
   // in full for each, and once for the total, days and hours; one several
@@ -715,6 +796,23 @@ export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: O
     if (list) list.push(e)
     else sessionsOf.set(e.sessionId, [e])
   }
+  // your time comes from every session at once, and a reply's stretch can
+  // start before any line of its session
+  const yours = counting === 'you' ? attention(sessionsOf) : undefined
+  // a turn's span starts before its own line, so the default window does too.
+  // A loop, not Math.min(...xs), which overflows the stack on a big log
+  let first = Infinity,
+    last = -Infinity
+  for (const e of valid) {
+    first = Math.min(first, time(e) - leadMs(e))
+    last = Math.max(last, time(e))
+  }
+  for (const byProject of yours?.values() ?? []) for (const intervals of byProject.values()) first = Math.min(first, intervals[0]![0])
+  // counting only prompts, the first one's gap before it too
+  if (counting === 'prompts') first -= idleCapMs
+  const lo = from ?? first
+  const hi = to ?? last + 1
+  const inWindow = (e: Event) => time(e) >= lo && time(e) < hi
 
   const dayMs = new Map<string, number>()
   const dayProjects = new Map<string, Record<string, number>>()
@@ -735,6 +833,10 @@ export function summarize(all: Event[], { from, to, idleCapMs, counting, tz }: O
   const reach = counting === 'prompts' ? idleCapMs : 0
   const counted = new Map<string, Map<string, Interval[]>>()
   for (const [sessionId, events] of sessionsOf) {
+    if (yours) {
+      counted.set(sessionId, yours.get(sessionId) ?? new Map())
+      continue
+    }
     // a session over before the window has nothing in it, so a short range
     // skips most of history
     if (lastAt(events) + reach < lo) continue
