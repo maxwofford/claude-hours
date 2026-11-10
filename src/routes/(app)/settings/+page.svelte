@@ -96,7 +96,7 @@
   <Card.Root>
     <Card.Header>
       <Card.Title>Idle timeout</Card.Title>
-      <Card.Description>A quiet stretch up to this long still counts as active in your time.</Card.Description>
+      <Card.Description>Counting Activity, a quiet stretch up to this long still counts as active.</Card.Description>
     </Card.Header>
     <Card.Content>
       <form method="post" action="?/idleCap" class="flex flex-wrap gap-2" use:enhance>

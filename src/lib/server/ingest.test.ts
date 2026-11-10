@@ -248,12 +248,12 @@ describe('digest', () => {
     expect(second.range.prompts.count).toBe(3)
     expect(second.range.sessions.map(s => s.sessionId).sort()).toEqual(['s1', 's2'])
 
-    // the 3 minutes between s1's prompts count under a 5 min cap, not the default 2
+    // the 3 minutes between s1's prompts count under the default 5 min cap, not under 2
     expect(await setIdleCap(db, person, 7)).toBe(false)
-    expect(await setIdleCap(db, person, 5)).toBe(true)
+    expect(await setIdleCap(db, person, 2)).toBe(true)
     const third = await digest(db, person, { counting: 'all' })
-    expect(third.idleCapMs).toBe(5 * 60_000)
-    expect(third.range.totalMs).toBeGreaterThan(second.range.totalMs)
+    expect(third.idleCapMs).toBe(2 * 60_000)
+    expect(third.range.totalMs).toBeLessThan(second.range.totalMs)
   })
 
   test('counting your time is kept apart from counting it all, with the same colors', async () => {
