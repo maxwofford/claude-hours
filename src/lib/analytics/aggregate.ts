@@ -472,6 +472,11 @@ export function projectSpans(events: Event[], idleCapMs: number, counting: Count
 // entrypoint other than the terminal's and the mod sees as origin `sdk`
 const isScripted = (events: Event[]) => events.some(e => e.event === 'session_start' && e.isInteractive === false)
 
+// a session its front end says an agent or a schedule launched (the mod's
+// launchedBy), whose prompts are no one's however many there are
+const isLaunchedByMachine = (events: Event[]) =>
+  events.some(e => e.event === 'session_start' && (e.launchedBy === 'agent' || e.launchedBy === 'schedule'))
+
 // a session's stretches by project, as they are, before any gap is bridged.
 // Counting only prompts, a script's prompts aren't anyone prompting
 function rawSpans(events: Event[], counting: Counting): Map<string, Interval[]> {
@@ -577,10 +582,11 @@ type Beat = { at: number; e: Event; sessionId: string; typingMs: number; ready: 
 // you since the one before (-Infinity for nothing) and how long after it
 // you could have been watching Claude work. A session of someone's has a
 // person's prompt and isn't a script, or has a script's two or more
-// (Paseo and other SDK front ends drive Claude Code like a script)
+// (Paseo and other SDK front ends drive Claude Code like a script), and
+// wasn't launched by an agent or a schedule
 function beatsOf(sessionId: string, events: Event[]): Beat[] {
   const prompted = events.filter(isPersonPrompt).length
-  if (!prompted || (isScripted(events) && prompted < 2)) return []
+  if (!prompted || isLaunchedByMachine(events) || (isScripted(events) && prompted < 2)) return []
   const readies: number[] = []
   const raw: { at: number; e: Event; typingMs: number; resumes: boolean }[] = []
   for (const e of events) {

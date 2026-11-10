@@ -166,6 +166,24 @@ test("counting your time, a script's lone prompt is no one's, but a front end's 
   expect(s.sessions.find(x => x.sessionId === 'q')!.activeMs).toBe(RETURN_MS + 2 * MIN)
 })
 
+test("counting your time, a session an agent or a schedule launched is no one's, however many prompts", () => {
+  const conversation = (sessionId: string, hour: number, launchedBy?: string) => [
+    at(`2026-10-19T${hour}:00:00Z`, 'session_start', { sessionId, isInteractive: false, launcher: 'paseo', ...(launchedBy && { launchedBy }) }),
+    at(`2026-10-19T${hour}:00:00Z`, 'prompt', { sessionId, origin: 'sdk' }),
+    at(`2026-10-19T${hour}:01:00Z`, 'turn_end', { sessionId, durationMs: MIN }),
+    at(`2026-10-19T${hour}:02:00Z`, 'prompt', { sessionId, origin: 'sdk' }),
+  ]
+  const events = [...conversation('a', 10, 'agent'), ...conversation('s', 14, 'schedule'), ...conversation('u', 18)]
+  const you = summarize(events, { idleCapMs: 5 * MIN, counting: 'you' })
+  expect(you.sessions.find(x => x.sessionId === 'a')!.activeMs).toBe(0)
+  expect(you.sessions.find(x => x.sessionId === 's')!.activeMs).toBe(0)
+  // unlabelled, it's still a front end's conversation
+  expect(you.sessions.find(x => x.sessionId === 'u')!.activeMs).toBe(RETURN_MS + 2 * MIN)
+  // and all of the time still has Claude's work in them
+  const all = summarize(events, { idleCapMs: 5 * MIN, counting: 'all' })
+  expect(all.sessions.find(x => x.sessionId === 'a')!.activeMs).toBeGreaterThan(0)
+})
+
 test('counting your time, typing counts in full however long the gap', () => {
   const events = [
     at('2026-10-19T12:00:00Z', 'prompt', { origin: 'composer' }),
