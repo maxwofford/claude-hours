@@ -11,8 +11,7 @@ const msOf = (value: string | null) => (value === null ? undefined : Number(valu
 // time), with days and hours in ?tz, the viewer's time zone; &spans adds every
 // active stretch, for the timeline. Without spans, a range with both ends
 // also gets the active time of the same stretch of clock before it.
-// It counts only your time, or with ?time=all all of it, with ?time=prompts
-// only the time spent prompting
+// ?time=all counts Claude's time too, not only yours
 export const GET: RequestHandler = async ({ locals, url }) => {
   const started = performance.now()
   const timing: Timing = new Map()
@@ -23,7 +22,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   if ([from, to].some(ms => ms !== undefined && !Number.isFinite(ms))) return Response.json({ error: 'from and to are epoch ms' }, { status: 400 })
   const tz = url.searchParams.get('tz') || undefined
   const time = url.searchParams.get('time') ?? 'you'
-  if (time !== 'all' && time !== 'prompts' && time !== 'you') return Response.json({ error: 'time is all, prompts or you' }, { status: 400 })
+  if (time !== 'you' && time !== 'all') return Response.json({ error: 'time is you or all' }, { status: 400 })
   try {
     const answer = await digest(db, viewing.id, { from, to, tz, spans: url.searchParams.has('spans'), counting: time as Counting }, timing)
     timing.set('total', { ms: performance.now() - started })

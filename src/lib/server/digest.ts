@@ -1,9 +1,8 @@
 // What the dashboard pages show, summed here instead of in the browser: a
 // range's summary, plus what all time decides whatever the range (each
 // project's color by rank, the calendar's days, each session's home project).
-// The browser gets these few numbers, not every event. Counting only prompts
-// or only your time changes every time in it but the colors, so a toggle
-// doesn't repaint them
+// The browser gets these few numbers, not every event. Counting only your
+// time changes every time in it but the colors, so a toggle doesn't repaint them
 import { REACH_MS, firstAt, lastAt, summarize, type Counting, type Event, type Summary } from '../analytics/aggregate'
 import type { Db } from './db/index'
 import { sessionsOf, timed, type Timing } from './history'
@@ -42,9 +41,8 @@ const ofCluster = new WeakMap<Event[], Cluster>()
 
 // sessions grouped where their stretches overlap, each group oldest first.
 // gap: how far apart two sessions can still change each other's time, since
-// counting only prompts, the first one in a session takes its gap (up to the
-// cap) from the last one before, and counting your time, a reply's stretch
-// depends on the heartbeat before it, in any session, up to REACH_MS back
+// counting your time, a reply's stretch depends on the heartbeat before it,
+// in any session, up to REACH_MS back
 function clusters(sessions: Event[][], gap: number): Event[][][] {
   const groups: Event[][][] = []
   let end = -Infinity
@@ -137,7 +135,7 @@ const within = (sessions: Event[][], gap: number, from: number, to = Infinity) =
   sessions.filter(events => boundsOf(events).end + gap >= from && boundsOf(events).start < to).flat()
 
 // how far apart two sessions can still change each other's time (see clusters)
-const gapOf = (options: Options) => (options.counting === 'prompts' ? options.idleCapMs : options.counting === 'you' ? REACH_MS : 0)
+const gapOf = (options: Options) => (options.counting === 'you' ? REACH_MS : 0)
 
 // tz is the viewer's IANA zone, days and hours are theirs; a zone that
 // doesn't exist throws a RangeError. spans (every active stretch) only when

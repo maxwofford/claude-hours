@@ -61,8 +61,8 @@ async function expectRoundTrip(dir: string) {
   expect(events).toEqual(local)
 
   // and the hub's summary is the one the browser worked out from them, in
-  // another zone than this machine's too, counting all of it or only yours
-  for (const counting of ['all', 'you'] as const) {
+  // another zone than this machine's too, counting either way
+  for (const counting of ['you', 'all'] as const) {
     for (const tz of [undefined, 'Asia/Kolkata']) {
       const ever = summarize(local, { idleCapMs: CAP, tz, counting })
       const from = ever.sessions.at(-1)!.start
@@ -95,7 +95,7 @@ async function expectRoundTrip(dir: string) {
     }
   }
   // projects are ranked (and colored) by all of the time, whatever's counted
-  expect((await digest(db, person, { counting: 'you' })).projects).toEqual(summarize(local, { idleCapMs: CAP }).projects)
+  expect((await digest(db, person, {})).projects).toEqual(summarize(local, { idleCapMs: CAP }).projects)
   // none of a session's spans start before its firstAt or end after its
   // lastAt, so a window leaves out the sessions that began after it
   for (const s of summarize(local, { idleCapMs: CAP }).sessions) {
@@ -256,40 +256,6 @@ describe('digest', () => {
     expect(third.range.totalMs).toBeGreaterThan(second.range.totalMs)
   })
 
-  test('counting only prompts is kept apart from counting it all, with the same colors', async () => {
-    const { db, person } = await withPerson()
-    await ingest(db, person, [
-      run(0, [
-        { t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 },
-        { t: 20 * 60_000, event: 'turn_end', durationMs: 19 * 60_000 },
-      ]),
-    ])
-    const all = await digest(db, person, { counting: 'all' })
-    const prompts = await digest(db, person, { counting: 'prompts' })
-    expect(all.range.totalMs).toBe(20 * 60_000)
-    // its minute of typing and the gap before it, up to the cap
-    expect(prompts.range.totalMs).toBe(60_000 + CAP)
-    expect(prompts.days.reduce((sum, d) => sum + d.ms, 0)).toBe(60_000 + CAP)
-    expect(prompts.projects).toEqual(all.projects)
-    // and neither is handed the other's summary of all of it
-    expect((await digest(db, person, { counting: 'all' })).range).toEqual(all.range)
-    expect((await digest(db, person, { counting: 'prompts' })).range).toEqual(prompts.range)
-  })
-
-  test('counting only prompts, a session soon after another takes its first gap from it, in the calendar too', async () => {
-    const { db, person } = await withPerson()
-    // one prompt typed from 1 s to 61 s, then another session's typed from
-    // half a cap later
-    const next = 61_000 + CAP / 2 + 30_000
-    await ingest(db, person, [
-      run(0, [{ t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 }]),
-      run(0, [{ t: 0, event: 'prompt', origin: 'composer', typingMs: 30_000 }], { session: 's2', run: next, header: { ...header, start: next } }),
-    ])
-    const got = await digest(db, person, { counting: 'prompts' })
-    expect(got.range.totalMs).toBe(CAP + 60_000 + CAP / 2 + 30_000)
-    expect(got.days.reduce((sum, d) => sum + d.ms, 0)).toBe(got.range.totalMs)
-  })
-
   test('counting your time is kept apart from counting it all, with the same colors', async () => {
     const { db, person } = await withPerson()
     await ingest(db, person, [
@@ -299,7 +265,7 @@ describe('digest', () => {
       ]),
     ])
     const all = await digest(db, person, { counting: 'all' })
-    const you = await digest(db, person, { counting: 'you' })
+    const you = await digest(db, person, {})
     expect(all.range.totalMs).toBe(20 * 60_000)
     // its minute of typing, coming back before it, and watching the turn start
     expect(you.range.totalMs).toBe(60_000 + RETURN_MS + WATCH_MS)
@@ -307,7 +273,7 @@ describe('digest', () => {
     expect(you.projects).toEqual(all.projects)
     // and neither is handed the other's summary of all of it
     expect((await digest(db, person, { counting: 'all' })).range).toEqual(all.range)
-    expect((await digest(db, person, { counting: 'you' })).range).toEqual(you.range)
+    expect((await digest(db, person, {})).range).toEqual(you.range)
   })
 
   test('counting your time, a session soon after another takes its first gap from it, in the calendar too', async () => {
@@ -319,7 +285,7 @@ describe('digest', () => {
       run(0, [{ t: 60_000, event: 'prompt', origin: 'composer', typingMs: 60_000 }]),
       run(0, [{ t: 0, event: 'prompt', origin: 'composer', typingMs: 30_000 }], { session: 's2', run: next, header: { ...header, start: next } }),
     ])
-    const got = await digest(db, person, { counting: 'you' })
+    const got = await digest(db, person, {})
     const second = 30_000 + replyMs(next - 61_000 - 30_000)
     expect(got.range.totalMs).toBeCloseTo(60_000 + RETURN_MS + second, 6)
     expect(got.days.reduce((sum, d) => sum + d.ms, 0)).toBeCloseTo(got.range.totalMs, 6)
