@@ -148,7 +148,7 @@ export async function digest(
   window: { from?: number; to?: number; tz?: string; spans?: boolean; counting?: Counting },
   timing?: Timing,
 ) {
-  const { from, to, tz, counting = 'all' } = window
+  const { from, to, tz, counting = 'you' } = window
   const [{ sessions, version }, cap] = await Promise.all([sessionsOf(db, personId, timing), idleCapMs(db, personId)])
   const key = `${version}|${tz}|${cap}`
   const entry = allTime(db, personId, key, sessions, { idleCapMs: cap, tz, counting }, timing)

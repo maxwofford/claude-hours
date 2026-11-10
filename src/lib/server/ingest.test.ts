@@ -232,7 +232,7 @@ describe('digest', () => {
     const { db, person } = await withPerson()
     await ingest(db, person, [run(0, [prompt(1), tool(2)])])
     const timing: Timing = new Map()
-    const first = await digest(db, person, {}, timing)
+    const first = await digest(db, person, { counting: 'all' }, timing)
     expect(first.range.prompts.count).toBe(1)
     expect(serverTiming(timing)).toMatch(
       /^runs;dur=[\d.]+, rows;dur=[\d.]+;desc="1 of 1 sessions, 1 runs", decode;dur=[\d.]+, ever;dur=[\d.]+, sum;dur=[\d.]+;desc="2 events"$/,
@@ -240,18 +240,18 @@ describe('digest', () => {
     expect(first.idleCapMs).toBe(CAP)
     // all of it again, with nothing new, is the summary already summed
     const again: Timing = new Map()
-    expect((await digest(db, person, {}, again)).range).toEqual(first.range)
+    expect((await digest(db, person, { counting: 'all' }, again)).range).toEqual(first.range)
     expect(again.has('sum')).toBe(false)
 
     await ingest(db, person, [run(2, [prompt(180_000)]), run(0, [prompt(1)], { session: 's2' })])
-    const second = await digest(db, person, {})
+    const second = await digest(db, person, { counting: 'all' })
     expect(second.range.prompts.count).toBe(3)
     expect(second.range.sessions.map(s => s.sessionId).sort()).toEqual(['s1', 's2'])
 
     // the 3 minutes between s1's prompts count under a 5 min cap, not the default 2
     expect(await setIdleCap(db, person, 7)).toBe(false)
     expect(await setIdleCap(db, person, 5)).toBe(true)
-    const third = await digest(db, person, {})
+    const third = await digest(db, person, { counting: 'all' })
     expect(third.idleCapMs).toBe(5 * 60_000)
     expect(third.range.totalMs).toBeGreaterThan(second.range.totalMs)
   })
@@ -264,7 +264,7 @@ describe('digest', () => {
         { t: 20 * 60_000, event: 'turn_end', durationMs: 19 * 60_000 },
       ]),
     ])
-    const all = await digest(db, person, {})
+    const all = await digest(db, person, { counting: 'all' })
     const prompts = await digest(db, person, { counting: 'prompts' })
     expect(all.range.totalMs).toBe(20 * 60_000)
     // its minute of typing and the gap before it, up to the cap
@@ -272,7 +272,7 @@ describe('digest', () => {
     expect(prompts.days.reduce((sum, d) => sum + d.ms, 0)).toBe(60_000 + CAP)
     expect(prompts.projects).toEqual(all.projects)
     // and neither is handed the other's summary of all of it
-    expect((await digest(db, person, {})).range).toEqual(all.range)
+    expect((await digest(db, person, { counting: 'all' })).range).toEqual(all.range)
     expect((await digest(db, person, { counting: 'prompts' })).range).toEqual(prompts.range)
   })
 
@@ -343,16 +343,17 @@ describe('quickStats', () => {
       session('this-week', at - 3 * DAY, '/code/hub', [{ t: 0, event: 'prompt' }, tool(120_000)]),
       session('long-ago', at - 30 * DAY, '/code/terra', [{ t: 0, event: 'prompt' }, tool(60_000)]),
     ])
+    // each: coming back to write its prompt, then watching Claude until its last line
     expect(await quickStats(db, person, { now: at + 2 * 60 * 60_000, tz: 'UTC' })).toEqual({
-      today: { ms: 60_000, sessions: 1 },
+      today: { ms: RETURN_MS + 60_000, sessions: 1 },
       week: {
-        ms: 180_000,
+        ms: 2 * RETURN_MS + 180_000,
         projects: [
-          { project: 'hub', ms: 120_000 },
-          { project: 'terra', ms: 60_000 },
+          { project: 'hub', ms: RETURN_MS + 120_000 },
+          { project: 'terra', ms: RETURN_MS + 60_000 },
         ],
       },
-      allTime: { ms: 240_000 },
+      allTime: { ms: 3 * RETURN_MS + 240_000 },
     })
   })
 })

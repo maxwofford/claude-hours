@@ -101,8 +101,8 @@ function digestPath(range: Range, spans: boolean, counting: Counting) {
   if (from !== undefined) q.set('from', String(from))
   if (to !== undefined) q.set('to', String(to))
   if (spans) q.set('spans', '')
-  // anything else kept in the browser counts it all
-  if (counting === 'prompts') q.set('time', 'prompts')
+  // anything else kept in the browser counts only yours
+  if (counting !== 'you') q.set('time', counting)
   return `/api/summary?${q}`
 }
 
